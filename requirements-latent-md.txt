@@ -1,0 +1,13 @@
+# Latent-space MD model: latent_md.py, latent_md_toy.py, latent_md_demo.py,
+# latent_md_real.py and test_latent_md.py. A CPU build of PyTorch is sufficient
+# (on a server without a GPU: pip install torch --index-url https://download.pytorch.org/whl/cpu).
+# Tested with Python 3.12, torch 2.14.1, numpy 2.5.4, MDAnalysis 2.10.0, pytest 9.1.1.
+torch>=2.0
+numpy>=1.24
+
+# only for the tests
+pytest>=7
+
+# optional: read PDB/PSF/GRO topologies with XTC/DCD/TRR/... trajectories in latent_md_real.py
+# (not needed when the trajectories are supplied as .npy / .npz arrays)
+MDAnalysis>=2.5

@@ -370,13 +370,27 @@ class LatentMD(nn.Module):
     # -- statistics ---------------------------------------------------------- #
 
     @torch.no_grad()
-    def initialize_statistics(self, coords: Tensor, labels: Tensor | None = None) -> None:
-        """Set feature scaling, decoder reference and label scales from (M, N, 3) data."""
-        features = pair_distances(coords)
-        self.encoder.feature_mean.copy_(features.mean(0))
-        self.encoder.feature_scale.copy_(features.std(0).clamp_min(1e-3 * features.mean()))
-        mean = procrustes_mean(coords)
-        deviation = kabsch_align(coords, mean.expand_as(coords)) - mean
+    def initialize_statistics(
+        self, coords: Tensor, labels: Tensor | None = None, max_frames: int = 20000
+    ) -> None:
+        """Set feature scaling, decoder reference and label scales from (M, N, 3) data.
+
+        Structure statistics use an evenly strided subset of at most ``max_frames``
+        frames and chunked accumulation, so memory stays bounded for long
+        trajectories of large complexes.
+        """
+        subset = coords[:: -(-coords.shape[0] // max_frames)]
+        total = squares = 0.0
+        for chunk in subset.split(1024):
+            features = pair_distances(chunk).double()
+            total = total + features.sum(0)
+            squares = squares + features.pow(2).sum(0)
+        feature_mean = total / subset.shape[0]
+        feature_std = (squares / subset.shape[0] - feature_mean.pow(2)).clamp_min(0.0).sqrt()
+        self.encoder.feature_mean.copy_(feature_mean)
+        self.encoder.feature_scale.copy_(feature_std.clamp_min(1e-3 * float(feature_mean.mean())))
+        mean = procrustes_mean(subset)
+        deviation = kabsch_align(subset, mean.expand_as(subset)) - mean
         self.reference_msd.copy_(deviation.pow(2).sum(-1).mean())
         self.decoder.reference.copy_(mean)
         self.decoder.length_scale.copy_(self.reference_msd.sqrt())
@@ -388,6 +402,11 @@ class LatentMD(nn.Module):
 
     def encode(self, x: Tensor) -> Tensor:
         return self.encoder(x)
+
+    @torch.no_grad()
+    def encode_frames(self, x: Tensor, chunk_size: int = 2048) -> Tensor:
+        """:meth:`encode` for long trajectories (M, N, 3) in chunks, without gradients."""
+        return torch.cat([self.encoder(c) for c in x.split(chunk_size)])
 
     def decode(self, z: Tensor) -> Tensor:
         return self.decoder(z)
@@ -649,7 +668,7 @@ def fit(
             if log is not None:
                 log("step %5d  " % step + "  ".join(f"{k}={v:.4f}" for k, v in record.items() if k != "step"))
     model.eval()
+    sample = model.encode_frames(data.coords[:: max(1, len(data.coords) // 20000)])
     with torch.no_grad():
-        sample = model.encode(data.coords[:: max(1, len(data.coords) // 20000)])
         model.free_energy_offset.copy_(model.policy.free_energy(sample).min())
     return history
